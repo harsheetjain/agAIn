@@ -1,5 +1,5 @@
-# Sets up the environment for the GitHub Copilot coding agent.
-# The job MUST be named `copilot-setup-steps` for Copilot to pick it up.
+# Sets up the environment for the GitHub Copilot coding agent (web + server).
+# The job MUST be named `copilot-setup-steps`.
 # Docs: https://docs.github.com/en/copilot/customizing-copilot/customizing-the-development-environment-for-copilot-coding-agent
 name: "Copilot Setup Steps"
 
@@ -20,10 +20,21 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Install dependencies
+          cache-dependency-path: web/package-lock.json
+      - name: Install web dependencies
+        working-directory: web
         run: npm ci
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore server dependencies
+        working-directory: server
+        run: dotnet restore

@@ -2,119 +2,132 @@
 
 Guidance for AI coding agents (GitHub Copilot and others) working in **agAIn**.
 Read this before making changes — it is the source of truth for architecture,
-commands, and conventions.
+commands, conventions, and guardrails.
 
 ## What this project is
 
-**agAIn** is an interactive **AI DJ** in the browser. You "nudge" the DJ with
-plain-language messages — *"more energy"*, *"something emotional"*, *"go
-garage"* — and it responds by picking and playing tracks and adjusting
-tempo / mood / volume, chatting back as it goes. It's inspired by live,
-improvised, sample-driven sets — built so you can *talk* to the decks.
+**agAIn** is an interactive **AI DJ / mixer** in the browser. It runs a live set
+on a two-deck console (decks, crossfader, 3-band EQ, sampler pads). When you
+step away it **takes over autonomously** — you watch it "press the buttons",
+beat-match and harmonically blend between tracks. Touch any control and you take
+over; after a short idle it resumes.
 
-The current build is a **dependency-free, offline demo**:
+It also runs a **"listen → sample → train" loop**: the browser samples the live
+master output (derived audio features only), streams those frames to the server,
+and an online learner folds them — plus your own console actions — into an
+interpretable **style** (energy target, tempo centre, transition pacing,
+harmonic and mood preference). Over time the autonomous set drifts toward how
+*you* mix.
 
-- a **rule-based DJ brain** (keyword → intent), and
-- a **Web Audio synth** that generates an audible groove from each track's
-  BPM/key.
+> **Guardrails (non-negotiable):** learn *style/behaviour from features*, never
+> clone copyrighted recordings. No YouTube/audio scraping. Only derived features
+> leave the browser. Any real audio you add must be your own or licensed. Titles
+> in the demo crate are original; no audio is bundled (grooves are synthesized).
 
-So it runs with **no API keys** and **no bundled/copyrighted audio**. The
-architecture is deliberately layered so an LLM brain and real audio can be
-dropped in **without touching the UI**.
-
-## Tech stack
-
-- **React 19 + TypeScript** (strict), bundled with **Vite**.
-- **Web Audio API** for synthesis and analysis (no audio assets).
-- **oxlint** for linting.
-
-## Repo layout
+## Monorepo layout
 
 ```
-src/
-  audio/AudioEngine.ts    # Web Audio synth + AnalyserNode; start/stop/volume/setTrack
-  dj/
-    types.ts              # Track, DjIntent, DjState, and the DjBrain interface
-    tracks.ts             # CRATE: demo tracks (original titles, no `src`)
-    djBrain.ts            # RuleDjBrain: free-text nudge -> DjIntent (keyword rules)
-  components/
-    Deck.tsx              # now-playing + transport controls + visualizer
-    NudgeConsole.tsx      # chat log + text input to nudge the DJ
-    Visualizer.tsx        # <canvas> frequency bars from the analyser
-  App.tsx                 # wires brain + engine + UI state together
-  main.tsx                # React entry point
+web/       React 19 + TypeScript (Vite) — the console UI + Web Audio + listen loop
+server/    .NET 10 (ASP.NET Core) — the DJ brain, autonomous loop, SignalR, trainer
+.github/   CI + Copilot config
 ```
 
-## Commands
+The **server is the authoritative brain and state**; the **web app renders
+server-driven state, plays the mix, and streams features/actions back.**
+
+### server/ — clean/onion architecture
+
+```
+AgainDj.Domain          # pure core: entities + interfaces (no external deps)
+  Model/                #   Track, MixerState, DeckState, DjAction, StyleSnapshot, ...
+  Abstractions/         #   IMixingPolicy, IStyleTrainer, ITrackLibrary, IConsoleGateway, ...
+  Mixing/MixerReducer   #   pure (state, action) -> state and time advance
+AgainDj.Application     # use-cases: MixSession (runtime), SessionCoordinator (hand-off)
+AgainDj.Infrastructure  # implementations: RuleMixingPolicy, OnlineStyleTrainer,
+                        #   JsonStyleStore, InMemoryTrackLibrary, RunningAudioAnalyzer
+AgainDj.Api             # ASP.NET Core: DjHub (SignalR), controllers, DI composition
+                        #   root, SignalRConsoleGateway, AutonomousLoopService
+AgainDj.Tests           # xUnit tests for the reducer, policy and harmonic mixing
+```
+
+Dependencies point inward: `Application`/`Infrastructure` → `Domain`; `Api` →
+`Application` + `Infrastructure`. The API is the only composition root. SignalR
+lives behind the `IConsoleGateway` port so the core stays transport-agnostic.
+
+### web/ — layered client
+
+```
+src/domain/types.ts     # TS mirror of the server contracts
+src/realtime/           # DjClient (SignalR), useDj hook, usePressFx (control flashes)
+src/audio/              # MixEngine (2 synth decks + EQ + crossfader + analyser),
+                        #   DeckVoice (per-deck synth), FeatureSampler (listen loop)
+src/components/         # DeckPanel, Crossfader, SamplerPads, StylePanel, ModeBar,
+                        #   ActionFeed, Visualizer
+src/App.tsx             # composition
+```
+
+## Run it
+
+Two processes (the Vite dev server proxies `/api` and `/hub` to the API, so the
+browser uses one origin — which also means a dev tunnel on `:5173` exposes
+everything).
 
 ```bash
-npm install        # install dependencies
-npm run dev        # dev server at http://localhost:5173
-npm run build      # type-check (tsc -b) + production build
-npm run typecheck  # type-check only
-npm run lint       # oxlint
-npm run preview    # serve the production build
+# 1) API  (http://localhost:5215)
+cd server && dotnet run --project AgainDj.Api --no-launch-profile
+
+# 2) Web  (http://localhost:5173)
+cd web && npm install && npm run dev
 ```
 
-**Always run `npm run build` and `npm run lint` before opening a PR.** `build`
-type-checks the whole project, so a green build means types are sound.
+Open http://localhost:5173, click **Enable sound**, then leave it alone to watch
+agAIn play — or grab the controls yourself.
 
-## How a nudge flows
+### Build / test / lint
 
-```
-NudgeConsole (text)
-  -> App.handleNudge(text)
-     -> brain.nudge(text, { state, tracks })  => DjIntent
-     -> App applies the intent to AudioEngine + React state
-     -> App appends the DJ's `intent.say` line to the chat
+```bash
+cd server && dotnet build && dotnet test      # .NET
+cd web    && npm run lint && npm run build     # web (tsc -b + vite)
 ```
 
-The `DjIntent.action` is one of `play | pause | resume | skip | tempo | mood |
-volume | unknown`. `App` is the only place that mutates the engine and state;
-the brain is pure (text + state in, intent out).
+Always run these before a PR.
 
-## Extending the DJ
+## Data flow
 
-### Swap in an LLM brain
+```
+Browser (MixEngine plays; FeatureSampler @4Hz)
+  --SignalR SendFeatureFrame-->  MixSession.IngestFeatureFrame -> OnlineStyleTrainer
+Human moves a control
+  --SignalR SendAction-->        MixSession.ApplyHumanActionAsync (Actor=Human, trains)
+AutonomousLoopService (~180ms)  -> MixSession.TickAsync -> IMixingPolicy.Decide
+  -> MixerReducer.Apply          -> IConsoleGateway.Broadcast{Action,State,Style}
+  --SignalR OnAction/OnState/OnStyle-->  Browser (renders + flashes pressed control)
+```
 
-`RuleDjBrain` implements the **`DjBrain`** interface in `src/dj/types.ts`. To go
-conversational, add an alternative (e.g. `LlmDjBrain`) implementing the same
-interface and construct it in `App.tsx` instead of `RuleDjBrain`. Have the model
-return a `DjIntent`. Keep the interface stable so the UI stays untouched.
+## Extending it
 
-- **Never hardcode keys.** Read config from `import.meta.env` (see
-  `.env.example`). Anything secret must go through a small server/proxy — do not
-  ship secret keys in client code.
+- **Smarter brain:** implement `IMixingPolicy` (e.g. an LLM/learned policy) and
+  register it in `Program.cs` instead of `RuleMixingPolicy`. The UI is untouched.
+- **Deploy a model to Azure:** stand up a Hugging Face model (embeddings /
+  MusicGen) behind an Azure ML managed online endpoint and call it from a new
+  `IMixingPolicy`/analyzer. Keep secrets in config, never in the client.
+- **Real audio:** give a `Track` a `src` URL and teach `MixEngine`/`DeckVoice` to
+  prefer a buffer/`<audio>` source. **Do not commit copyrighted audio.**
 
-### Add real music
+## Conventions
 
-Give a `Track` a `src` URL in `src/dj/tracks.ts`, then teach `AudioEngine` to
-prefer an audio source (`<audio>` / `AudioBufferSourceNode`) over the synth when
-`src` is present. **Do not commit copyrighted audio** — use royalty-free /
-licensed sources or user-provided URLs.
+**C#** — nullable enabled; prefer immutable `record`s; interfaces in
+`Domain.Abstractions`; keep the reducer/policy pure and unit-tested; DI only in
+the API composition root; one public type per file.
 
-## Conventions (enforced by tsconfig — the build fails otherwise)
+**TypeScript** — strict with `verbatimModuleSyntax` (use `import type`) and
+`erasableSyntaxOnly` (**no** `enum`/parameter-properties — use string-literal
+unions and explicit fields); function components + hooks; no unused
+locals/params.
 
-- **`verbatimModuleSyntax`** → import types with `import type { ... }`.
-- **`noUnusedLocals` / `noUnusedParameters`** → no unused variables or params.
-- **`erasableSyntaxOnly`** → **no** TS `enum`, `namespace`, or constructor
-  parameter properties. Use string-literal unions and explicit field
-  declarations instead.
-- **Function components + hooks only** — no class components.
-- Keep modules small and single-purpose; put shared types in `src/dj/types.ts`.
+## Roadmap
 
-## Guardrails
-
-- **No secrets in the repo.** Use `.env` (gitignored); only `.env.example` is
-  tracked.
-- **No copyrighted content** — audio, artwork, or real track metadata. Titles in
-  `CRATE` are original.
-- **Keep the offline demo working** — `npm run dev` must run with no network and
-  no keys.
-
-## Roadmap ideas
-
-- LLM-backed conversational brain (`LlmDjBrain`).
-- Real audio playback with crossfade / beatmatching between tracks.
-- Persisted crates and listening history.
-- Vitest tests for `djBrain` intent parsing.
+- LLM-backed `IMixingPolicy`; Azure ML endpoint for embeddings/generation.
+- Real audio playback + crossfade/beat-grid alignment; stem sampler (Demucs).
+- Expose the UI via a dev tunnel (`devtunnel host -p 5173`).
+- Persisted set history; richer training signals.

@@ -25,5 +25,13 @@ dist-ssr
 *.suo
 *.ntvs*
 *.njsproj
-*.sln
 *.sw?
+
+# .NET build output
+[Bb]in/
+[Oo]bj/
+*.user
+.vs/
+
+# Runtime artifacts (learned style is regenerated at runtime)
+server/**/data/

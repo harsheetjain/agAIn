@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="AgainDj.Api/AgainDj.Api.csproj" />
+  <Project Path="AgainDj.Application/AgainDj.Application.csproj" />
+  <Project Path="AgainDj.Domain/AgainDj.Domain.csproj" />
+  <Project Path="AgainDj.Infrastructure/AgainDj.Infrastructure.csproj" />
+  <Project Path="AgainDj.Tests/AgainDj.Tests.csproj" />
+</Solution>
